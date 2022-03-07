@@ -7,14 +7,17 @@ import Option "mo:base/Option";
 import TrieMap "mo:base/TrieMap";
 import Hash "mo:base/Hash";
 import Text "mo:base/Text";
+import Cycles "mo:base/ExperimentalCycles";
+import Result "mo:base/Result";
+import Principal "mo:base/Principal";
 
 import Logger "mo:ic-logger/Logger";
-import SingleLogger "./SingleLogger.mo";
+import SingleLogger "./SingleLogger";
 
 shared(installer) actor class MultiLogger() = this{
     private let CYCLE_LIMIT = 2_000_000_000_000;
     private let IC : ICActor = actor "aaaaa-aa";
-    private var loggers = TrieMap.TrieMap<Nat, Principal>(Nat.equal, Nat.hash);
+    private var loggers = TrieMap.TrieMap<Nat, Principal>(Nat.equal, Hash.hash);
     private var current_logger_index = 0;
     private var current_msg_index = 0;
     private var total_msg_index = 0;
@@ -24,11 +27,29 @@ shared(installer) actor class MultiLogger() = this{
         #ViewRangeError;
     };
     private type SL = actor {
-        append : shared {msgs : [Text]} -> async ();
-        view : query {from: Nat; to: Nat} -> async Logger.View<Text>;
+        append : shared (msgs : [Text]) -> async ();
+        view : query (from: Nat, to: Nat) -> async Logger.View<Text>;
         stats : query () -> async Logger.Stats;
         wallet_receive : shared() -> async Nat;
     };
+    private type canister_id = Principal;
+
+    private type canister_settings = {
+        freezing_threshold : ?Nat;
+        controllers : ?[Principal];
+        memory_allocation : ?Nat;
+        compute_allocation : ?Nat;
+    };
+
+    private type definite_canister_settings = {
+        freezing_threshold : Nat;
+        controllers : [Principal];
+        memory_allocation : Nat;
+        compute_allocation : Nat;
+    };
+
+    private type wasm_module = [Nat8];
+
     private type ICActor = actor {
         canister_status : shared { canister_id : canister_id } -> async {
             status : { #stopped; #stopping; #running };
@@ -74,15 +95,15 @@ shared(installer) actor class MultiLogger() = this{
             } -> async ();
     };
 
-    public shared (msg) func append(msgs: [Text]) : async Result<Text, Error>{
-        switch(_append(msgs)){
+    public shared (msg) func append(msgs: [Text]) : async Result.Result<Text, Error>{
+        switch(await _append(msgs)){
             case (#ok(info)) { #ok(info) };
             case (#err(err)) { #err(err) };
         }
     };
 
-    public shared (msg) func view(from : Nat, to : Nat) : async Result<[Text], Error>{
-        switch(_view(from, to)){
+    public shared (msg) func view(from : Nat, to : Nat) : async Result.Result<[Text], Error>{
+        switch(await _view(from, to)){
             case (#ok(txts)) { #ok(txts) };
             case (#err(err)) { #err(err) };
         }
@@ -92,13 +113,13 @@ shared(installer) actor class MultiLogger() = this{
         Cycles.accept(Cycles.available())
     };
 
-    private func _append(msgs : [Text]) : Result<Text, Error> {
+    public func _append(msgs : [Text]) : async Result.Result<Text, Error> {
         let input_size = msgs.size();
         if (input_size <= 0) {
             return #err(#MsgInputSizeErr);
         };
         if (current_logger_index == 0) {
-            _getNewLogger();
+            await _getNewLogger();
         };
         var msg_index = 0;
         var input_tmp_size = 0;
@@ -120,7 +141,7 @@ shared(installer) actor class MultiLogger() = this{
                 input_tmp_size := 0;
                 switch (loggers.get(current_logger_index)) {
                     case null { return #err(#LoggerNotExist); };
-                    case (sl_principal) {
+                    case (?sl_principal) {
                         let sl = actor(Principal.toText(sl_principal)) : SL;
                         await sl.append(Array.freeze(tmp));
                     };
@@ -128,7 +149,7 @@ shared(installer) actor class MultiLogger() = this{
                 if (current_msg_index < 100) {
                     break l;
                 } else { 
-                    _getNewLogger();
+                    await _getNewLogger();
                     current_msg_index := 0;
                     if (input_size == msg_index) break l;
                     once_size := input_size - msg_index;
@@ -143,29 +164,52 @@ shared(installer) actor class MultiLogger() = this{
         #ok("Append Over")        
     };
 
-    private func _view(from : Nat, to : Nat) : Result<[Text], Error> {
+    public func _view(from : Nat, to : Nat) : async Result.Result<[Text], Error> {
         if (from > to or from < 0 or to < 0 or (to + 1) > total_msg_index) return #err(#ViewRangeError);
         var res : [var Text] = [var];
+        var res_ : [var Text] = [var];
         var from_index = from;
         var msg_index = 0;
         var logger_index = from_index / 100 + 1; 
         var start_index = from_index % 100; 
         label l loop {
             var end_index : Nat = 99; 
-            if(to - from_index < (99 - start_index){
+            if(to - from_index < (99 - start_index)){
                 end_index := start_index - from_index + to;
             };
 
             var tmp : [var Text] = [var];
             switch (loggers.get(logger_index)) {
                 case null { return #err(#LoggerNotExist); };
-                case (sl_principal) {
-                    let sl = actor(Principal.toText(sl_principal))) : SL;
-                    tmp := Array.thaw<Text>(await sl.view(start_index, end_index)).messages);
+                case (?sl_principal) {
+                    let sl = actor(Principal.toText(sl_principal)) : SL;
+                    tmp := Array.thaw<Text>((await sl.view(start_index, end_index)).messages);
                 };
             };
             
-            res := _appendText(res, tmp);
+            // res := await _appendText(res, tmp);
+
+            res_ := do{
+                switch(res.size(), tmp.size()) {
+                    case (0, 0) { [var] };
+                    case (0, _) { tmp };
+                    case (_, 0) { res };
+                    case (xsSize, ysSize) {
+                        let res2 = Array.init<Text>(res.size() + tmp.size(), "");
+                        var i = 0;
+                        for(e in res2.vals()){
+                            res2[i] := res2[i];
+                            i += 1;
+                        };
+                        for(e in tmp.vals()){
+                            res2[i] := tmp[i - res2.size()];
+                            i += 1;
+                        };
+                        res2
+                    };
+                }
+            };
+
             if (end_index < 99) {
                 break l;
             } else { 
@@ -175,39 +219,15 @@ shared(installer) actor class MultiLogger() = this{
             };
         };
 
-        #ok(Array.freeze(res))
+        #ok(Array.freeze(res_))
     };
 
-    private func _appendText(
-        buffer : [var Text], 
-        arr : [var Text]
-    ) : [var Text]{
-        switch(buffer.size(), arr.size()) {
-            case (0, 0) { [var] };
-            case (0, _) { arr };
-            case (_, 0) { buffer };
-            case (xsSize, ysSize) {
-                let res = Array.init<Text>(buffer.size() + arr.size(), "");
-                var i = 0;
-                for(e in buffer.vals()){
-                    res[i] := buffer[i];
-                    i += 1;
-                };
-                for(e in arr.vals()){
-                    res[i] := arr[i - buffer.size()];
-                    i += 1;
-                };
-                res
-            };
-        }
-    };
-
-    private _getNewLogger() {
+    public func _getNewLogger() : async () {
         Cycles.add(CYCLE_LIMIT);
-        let new_SL = await SingleLogger:SingleLogger();
+        let new_SL = await SingleLogger.SingleLogger();
         let new_principal = Principal.fromActor(new_SL);
         await IC.update_settings({
-            canister_id = principal;
+            canister_id = new_principal;
             settings = {
                 freezing_threshold = ?2592000;
                 controllers = ?[Principal.fromActor(this)]; // owners + container
