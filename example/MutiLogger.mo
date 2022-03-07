@@ -186,8 +186,6 @@ shared(installer) actor class MultiLogger() = this{
                     tmp := Array.thaw<Text>((await sl.view(start_index, end_index)).messages);
                 };
             };
-            
-            // res := await _appendText(res, tmp);
 
             res_ := do{
                 switch(res.size(), tmp.size()) {
