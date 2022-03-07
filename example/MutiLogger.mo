@@ -9,7 +9,7 @@ import Hash "mo:base/Hash";
 import Text "mo:base/Text";
 
 import Logger "mo:ic-logger/Logger";
-import SingleLogger "./SingleLogger.mo"
+import SingleLogger "./SingleLogger.mo";
 
 shared(installer) actor class MultiLogger() = this{
     private let CYCLE_LIMIT = 2_000_000_000_000;
