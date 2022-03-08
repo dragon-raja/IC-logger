@@ -7,10 +7,9 @@ import List "mo:base/List";
 import Nat "mo:base/Nat";
 import Option "mo:base/Option";
 
-import Logger "mo:ic-logger/Logger";
-import Cycles "mo:base/ExperimentalCycles";
+import Logger "./Logger";
 
-shared(msg) actor class SingleLogger() {
+shared(msg) actor class TextLogger() {
   let OWNER = msg.caller;
 
   stable var state : Logger.State<Text> = Logger.new<Text>(0, null);
@@ -21,13 +20,12 @@ shared(msg) actor class SingleLogger() {
 
   // Set allowed principals.
   public shared (msg) func allow(ids: [Principal]) {
-    assert(msg.caller == OWNER);
     allowed := ids;
   };
 
   // Add a set of messages to the log.
   public shared (msg) func append(msgs: [Text]) {
-    // assert(Option.isSome(Array.find(allowed, func (id: Principal) : Bool { msg.caller == id })));
+    assert(Option.isSome(Array.find(allowed, func (id: Principal) : Bool { msg.caller == id })));
     logger.append(msgs);
   };
 
@@ -44,8 +42,9 @@ shared(msg) actor class SingleLogger() {
     logger.view(from, to)
   };
 
-  public shared({caller}) func wallet_receive() : async Nat {
-    Cycles.accept(Cycles.available())
-  };
-
-};
+  // Drop past buckets (oldest first).
+  public shared (msg) func pop_buckets(num: Nat) {
+    assert(msg.caller == OWNER);
+    logger.pop_buckets(num)
+  }
+}
