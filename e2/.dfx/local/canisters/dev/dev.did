@@ -1,0 +1,21 @@
+type dev = 
+ service {
+   create_canister: () -> (Result_1);
+   delete_canister: (canister_id) -> (Result);
+   install_code: (vec nat8, canister_id) -> (Result);
+   start_canister: (canister_id) -> (Result);
+   stop_canister: (canister_id) -> (Result);
+ };
+type canister_id = principal;
+type Result_1 = 
+ variant {
+   err: Error;
+   ok: canister_id;
+ };
+type Result = 
+ variant {
+   err: Error;
+   ok: text;
+ };
+type Error = variant {PermissionDenied;};
+service : () -> dev
