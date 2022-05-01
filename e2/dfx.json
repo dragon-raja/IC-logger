@@ -1,7 +1,7 @@
 {
     "canisters": {
         "dev": {
-            "main": "dev.mo",
+            "main": "main.mo",
             "type": "motoko"
         }
     },
